@@ -23,34 +23,25 @@ static struct device *mydevice;
 static struct cdev mycdev;
 static dev_t dev = 0;
 
-static void print_reg(struct pt_regs *regs, int r)
-{
-    int rc;
-    int arg;
-    if (regs->regs[r]) {
-        if ((rc = copy_from_user(&arg, (const void __user *)regs->regs[r], sizeof(int)))) {
-            pr_info("failed to get argument %d...%d\n", r, rc);
-        } else {
-            pr_info("arg[%d]: %d\n", r, arg);
-        }
-    }
-}
-
 static int uprobe_handler(struct uprobe_consumer *uc, struct pt_regs *regs)
 {
     int rc;
     int i = 0;
     pr_info("enter uprobe_handler...\n");
 
-
+#if defined(CONFIG_ARM64)
     for (; i < 31; i++) {
-        pr_info("regs[%d] = %p\n", i, regs->regs[i]);
+        pr_info("regs[%d] = %lu\n", i, regs->regs[i]);
     }
     pr_info("sp: %p\n", regs->sp);
+#elif defined(CONFIG_X86_64)
+    pr_info("regs[rdi] = %lu\n", regs->di);
+    pr_info("regs[rsi] = %lu\n", regs->si);
+    pr_info("regs[rdx] = %lu\n", regs->dx);
+    pr_info("regs[rcx] = %lu\n", regs->cx);
+    pr_info("regs[rax] = %lu\n", regs->ax);
+#endif
 
-    /* pr_info("wo: %p\n", (regs->regs[0] & 0xFFFFFFFF)); */
-    /* pr_info("w1: %p\n", (regs->regs[1] & 0xFFFFFFFF)); */
-    /* pr_info("w2: %p\n", (regs->regs[2] & 0xFFFFFFFF)); */
     /* char stack[256]; */
     /* if (regs->sp) { */
     /*     if ((rc = copy_from_user(stack, (const void __user *)regs->sp, 64))) { */
@@ -61,32 +52,34 @@ static int uprobe_handler(struct uprobe_consumer *uc, struct pt_regs *regs)
     /*     } */
     /* } */
 
-    print_reg(regs, 0);
-    print_reg(regs, 1);
-    print_reg(regs, 2);
-    /* print_reg(regs, 12); */
     return 0;
 }
 
 static int uprobe_ret_handler(struct uprobe_consumer *uc, unsigned long func, struct pt_regs *regs)
 {
     int rc;
-    pr_info("uprobe_ret_handler...\n");
-    pr_info("retval: %d\n", regs->regs[0]);
-    /* char stack[256]; */
-    /* if (regs->sp) { */
-    /*     if ((rc = copy_from_user(stack, (const void __user *)regs->sp, 64))) { */
-    /*         pr_info("failed to get stack ...%d\n", rc); */
-    /*     } else { */
-    /*         long *sp = (long *)(stack + 40); */
-    /*         pr_info("sp[0]: %ld\n", sp[0]); */
-    /*         sp = (long *)(stack + 32); */
-    /*         pr_info("sp[1]: %ld\n", sp[1]); */
-    /*         sp = (long *)(stack + 24); */
-    /*         pr_info("sp[2]: %ld\n", sp[2]); */
-    /*     } */
-    /* } */
+    pr_info("enter uprobe_ret_handler...\n");
 
+#if defined(CONFIG_ARM64)
+    int i = 0;
+    for (; i < 31; i++) {
+        pr_info("regs[%d] = %lu\n", i, regs->regs[i]);
+    }
+    pr_info("sp: %lu\n", regs->sp);
+#elif defined(CONFIG_X86_64)
+    pr_info("register set came from user mode : %d\n", user_mode(regs) ? 1 : 0);
+    pr_info("regs[rdi] = %lu\n", regs->di);
+    pr_info("regs[rsi] = %lu\n", regs->si);
+    pr_info("regs[rdx] = %lu\n", regs->dx);
+    pr_info("regs[rcx] = %lu\n", regs->cx);
+    pr_info("regs[rax] = %lu\n", regs->ax);
+#endif
+
+#if defined(CONFIG_ARM64)
+    pr_info("retval: %lu\n", regs->regs[0]);
+#elif defined(CONFIG_X86_64)
+    pr_info("retval: %lu\n", regs->ax);
+#endif
     return 0;
 }
 
