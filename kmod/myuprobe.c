@@ -8,6 +8,8 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/slab.h> // kzalloc
+#include <linux/list.h> // linked list API
+#include <linux/spinlock.h>
 
 #define IOC_MAGIC 'x'
 #define IOCTL_ATTACH_UPROBE _IOW(IOC_MAGIC, 0, void *)
@@ -17,19 +19,25 @@ struct uprobe_attach_info {
     long long offset;
 };
 
-static int major;
+struct uprobe_list_node {
+    struct uprobe_attach_info attach_info;
+    struct list_head list;
+};
+
 static struct class *myclass;
 static struct device *mydevice;
 static struct cdev mycdev;
 static dev_t dev = 0;
 
+static LIST_HEAD(uprobe_list);
+DEFINE_SPINLOCK(uprobe_list_spinlock);
+
 static int uprobe_handler(struct uprobe_consumer *uc, struct pt_regs *regs)
 {
-    int rc;
-    int i = 0;
     pr_info("enter uprobe_handler...\n");
 
 #if defined(CONFIG_ARM64)
+    int i = 0;
     for (; i < 31; i++) {
         pr_info("regs[%d] = %lu\n", i, regs->regs[i]);
     }
@@ -41,23 +49,11 @@ static int uprobe_handler(struct uprobe_consumer *uc, struct pt_regs *regs)
     pr_info("regs[rcx] = %lu\n", regs->cx);
     pr_info("regs[rax] = %lu\n", regs->ax);
 #endif
-
-    /* char stack[256]; */
-    /* if (regs->sp) { */
-    /*     if ((rc = copy_from_user(stack, (const void __user *)regs->sp, 64))) { */
-    /*         pr_info("failed to get stack ...%d\n", rc); */
-    /*     } else { */
-    /*         int *sp = (int *)(stack + 28); */
-    /*         pr_info("sp[0]: %d\n", sp[0]); */
-    /*     } */
-    /* } */
-
     return 0;
 }
 
 static int uprobe_ret_handler(struct uprobe_consumer *uc, unsigned long func, struct pt_regs *regs)
 {
-    int rc;
     pr_info("enter uprobe_ret_handler...\n");
 
 #if defined(CONFIG_ARM64)
@@ -94,39 +90,55 @@ long ioctl_handler(struct file *filp, unsigned int cmd, unsigned long arg)
     struct file *file = NULL;
     struct inode *f_inode = NULL;
 
-    pr_info("recevied ioctl... %lu\n", cmd);
+    pr_info("recevied ioctl... %u\n", cmd);
 
     switch (cmd) {
     case IOCTL_ATTACH_UPROBE:
-        struct uprobe_attach_info *attach_info;
+        struct uprobe_list_node *list_node;
 
         pr_info("handle IOCTL_ATTACH_UPROBE...\n");
-        attach_info = kzalloc(sizeof(struct uprobe_attach_info), GFP_KERNEL);
-        if (!attach_info) {
+        list_node = kzalloc(sizeof(struct uprobe_list_node), GFP_KERNEL);
+        if (!list_node) {
             pr_info("failed to alloc...\n");
             retval = -ENOMEM;
             goto out;
         }
+        INIT_LIST_HEAD(&list_node->list);
 
-        if ((copy_from_user(attach_info, (const void __user *)arg, sizeof(struct uprobe_attach_info)))) {
+        if ((copy_from_user(&list_node->attach_info, (const void __user *)arg, sizeof(struct uprobe_attach_info)))) {
             pr_info("failed to copy_from_user...\n");
             retval = -EIO;
+            kfree(list_node);
             goto out;
         }
 
-        if (!attach_info->fd || !attach_info->offset) {
+        if (!list_node->attach_info.fd || !list_node->attach_info.offset) {
             pr_info("no fd or offset provided...\n");
             retval = -EIO;
+            kfree(list_node);
             goto out;
         }
 
-        file = fget_raw(attach_info->fd);
+        file = fget_raw(list_node->attach_info.fd);
         if (!file) {
             retval = -EBADF;
+            kfree(list_node);
+            goto out;
+        }
+        f_inode = igrab(file->f_inode);
+
+        retval = uprobe_register(f_inode, list_node->attach_info.offset, &uc);
+        if (retval) {
+            pr_info("uprobe_register failed with: %d\n", retval);
+            fput(file);
+            kfree(list_node);
+            goto out;
         }
 
-        f_inode = igrab(file->f_inode);
-        retval = uprobe_register(f_inode, attach_info->offset, &uc);
+        spin_lock(&uprobe_list_spinlock);
+        list_add_tail(&list_node->list, &uprobe_list);
+        spin_unlock(&uprobe_list_spinlock);
+
         pr_info("uprobe_registed...\n");
         fput(file);
         break;
@@ -154,19 +166,12 @@ static int __init uprobe_init(void)
 {
     pr_info("uprobe module init...\n");
 
-    /* major = register_chrdev(0, "myuprobe", &fops); */
-    /* if (major < 0) { */
-    /*     pr_alert("Failed to register char device: %d\n", major); */
-    /*     return major; */
-    /* } */
-
     if (alloc_chrdev_region(&dev, 0, 1, "myuprobe") < 0) {
         pr_alert("Failed to register char device...\n");
         return -1;
     }
 
     cdev_init(&mycdev, &fops);
-
     cdev_add(&mycdev, dev, 1);
 
     myclass = class_create(THIS_MODULE, "myuprobeclass");
@@ -181,16 +186,27 @@ static int __init uprobe_init(void)
         return -1;
     }
 
+    INIT_LIST_HEAD(&uprobe_list);
     return 0;
 }
 
 static void __exit uprobe_exit(void)
 {
+    struct uprobe_list_node *cur = NULL, *tmp;
+
+    spin_lock(&uprobe_list_spinlock);
+    list_for_each_entry_safe(cur, tmp, &uprobe_list, list) {
+        kfree(cur);
+    }
+    spin_unlock(&uprobe_list_spinlock);
+
+
     /* unregister_chrdev(0, "myuprobe"); */
     device_destroy(myclass, dev);
     class_destroy(myclass);
     cdev_del(&mycdev);
     unregister_chrdev_region(dev, 1);
+
     pr_info("uprobe module exit!!!\n");
 }
 
