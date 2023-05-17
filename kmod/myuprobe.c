@@ -43,11 +43,18 @@ static int uprobe_handler(struct uprobe_consumer *uc, struct pt_regs *regs)
     }
     pr_info("sp: %p\n", regs->sp);
 #elif defined(CONFIG_X86_64)
-    pr_info("regs[rdi] = %lu\n", regs->di);
-    pr_info("regs[rsi] = %lu\n", regs->si);
-    pr_info("regs[rdx] = %lu\n", regs->dx);
-    pr_info("regs[rcx] = %lu\n", regs->cx);
-    pr_info("regs[rax] = %lu\n", regs->ax);
+    pr_info("regs[0] = %lu\n", regs->di);
+    pr_info("regs[1] = %lu\n", regs->si);
+    pr_info("regs[2] = %lu\n", regs->dx);
+    pr_info("regs[3] = %lu\n", regs->cx);
+    pr_info("regs[4] = %lu\n", regs->ax);
+#elif defined(CONFIG_PPC64)
+    int i = 0;
+    for (; i < 8; i++) {
+        pr_info("regs[%d] = %lu\n", i, regs->gpr[3 + i]);
+    }
+    pr_info("regs[9] = %lu\n", regs_get_kernel_stack_nth(regs, 1));
+    pr_info("regs[10] = %lu\n", regs_get_kernel_stack_nth(regs, 2));
 #endif
     return 0;
 }
@@ -127,6 +134,7 @@ long ioctl_handler(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         f_inode = igrab(file->f_inode);
 
+        pr_info("inode: %px, offset: %lu\n", f_inode, list_node->attach_info.offset);
         retval = uprobe_register(f_inode, list_node->attach_info.offset, &uc);
         if (retval) {
             pr_info("uprobe_register failed with: %d\n", retval);

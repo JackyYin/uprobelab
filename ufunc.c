@@ -4,15 +4,13 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-int simple(long x, long y, long z)
+int simple(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j)
 {
-    printf("%d, %d, %d\n", x, y, z);
     return 100;
 }
 
 int main()
 {
-    long x = 5;
-    simple(x, 888, 999);
+    simple(1,2,3,4,5,6,7,8,9,10);
     while (1) {}
 }
